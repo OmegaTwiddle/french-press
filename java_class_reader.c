@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#include "java_class.c"
 
 static int short_swap(short s) {
   unsigned char b1, b2;
@@ -58,20 +61,24 @@ static void * load_binary_class(const char * filename, size_t *size) {
 /**
  * Print out the java magic number aka cafebabe
  */
-static void print_java_magic_prefix(void * java_class, int * class_index) {
+static void print_java_magic_prefix(void * java_class, int * class_index, java_class_s * class_object) {
+  int magic = long_swap(*(int*)java_class);
   printf("Java class file prefix: 0x%x\n", 
-	 long_swap(*(int*)java_class)
+	 magic
 	 );
+  class_object->magic = magic;
   *class_index += 4;
 }
 
 /**
  * Minor version of the java class file. No idea what this is.
  */
-static void print_java_minor_version(void * java_class, int *class_index) {
+static void print_java_minor_version(void * java_class, int *class_index, java_class_s * class_object) {
+  short minor = short_swap(*((short *)java_class + 2));
   printf("Java Minor Version %hd\n",
-	 short_swap(*((short *)java_class + 2))
+	 minor
 	 );
+  class_object->minor = minor;
   *class_index += 2;
 }
 
@@ -79,21 +86,24 @@ static void print_java_minor_version(void * java_class, int *class_index) {
  * Major version of the java class file. Defines the jkd version that 
  * was used to build it. 51 for javaSE7
  */
-static void print_java_major_version(void * java_class, int *class_index) {
+static void print_java_major_version(void * java_class, int *class_index, java_class_s * class_object) {
+  short major = short_swap(*((short *)java_class + 3));
   printf("Java Major Version %hd\n",
-	 short_swap(*((short *)java_class + 3))
+	 major
 	 );
+  class_object->major = major;
   *class_index += 2;
 }
 
 /**
  * Get the size of the constant pool in java. Return it and print it out.
  */
-static int print_and_get_const_pool_size(void * java_class, int *class_index) {
+static int print_and_get_const_pool_size(void * java_class, int *class_index, java_class_s * class_object) {
   short const_pool_size = short_swap(*((short *)java_class + 4));
   printf("Size of constant pool:%hd\n",
 	 const_pool_size
 	 );
+  class_object->const_count = const_pool_size;
   *class_index += 2;
   return const_pool_size;
 }
@@ -101,11 +111,13 @@ static int print_and_get_const_pool_size(void * java_class, int *class_index) {
 /**
  * Prints the utf8 constant type
  */
-static void print_java_constant_utf8(void *java_class, int *class_index) {
+static char * print_java_constant_utf8(void *java_class, int *class_index) {
   short string_length = short_swap(
 				   *((short*) ((char*)java_class + (*class_index)))
 				   );
   *class_index += 2;
+  char * info = malloc(string_length * sizeof(string_length));
+  bzero(info, string_length);
   printf("    String length: %hd\n", 
 	 string_length
 	 );
@@ -113,6 +125,7 @@ static void print_java_constant_utf8(void *java_class, int *class_index) {
   int i = 0;
   for (i; i < string_length; i++) {
     string_constant[i] = *((char*)java_class + *class_index);
+    info[i] = string_constant[i];
     (*class_index)++;
   }
   string_constant[string_length] = '\0';
@@ -120,7 +133,7 @@ static void print_java_constant_utf8(void *java_class, int *class_index) {
 	 string_constant
 	 );
   
-  
+  return info;
 }
 
 /**
@@ -129,7 +142,7 @@ static void print_java_constant_utf8(void *java_class, int *class_index) {
  * u2 class_index;
  * ut name_and_type_index;
  */
-static void print_java_constant_ref(void *java_class, int *class_index) {
+static char * print_java_constant_ref(void *java_class, int *class_index) {
   short jvm_class_index = short_swap(
 				     *((short*) ((char*)java_class + (*class_index)))
 				     );
@@ -144,12 +157,13 @@ static void print_java_constant_ref(void *java_class, int *class_index) {
 	 name_and_type_index
 	 );
   *class_index += 2;
+  return 0;
 }
 
 /**
  * Prints the Class-type constant
  */
-static void print_java_constant_class(void *java_class, int *class_index) {
+static char * print_java_constant_class(void *java_class, int *class_index) {
   short name_index = short_swap(
 				     *((short*) ((char*)java_class + (*class_index)))
 				     );
@@ -157,10 +171,10 @@ static void print_java_constant_class(void *java_class, int *class_index) {
 	 name_index
 	 );
   *class_index += 2;
-  
+  return 0;
 }
 
-static void print_java_constant_name_and_type(void *java_class, int *class_index) {
+static char * print_java_constant_name_and_type(void *java_class, int *class_index) {
   short name_index = short_swap(
 				*((short*) ((char*)java_class + (*class_index)))
 				);
@@ -175,43 +189,46 @@ static void print_java_constant_name_and_type(void *java_class, int *class_index
 	 descriptor_index
 	 );
   *class_index += 2;
-  
+  return 0;
 }
 
-static void handle_tag(short tag, void *java_class, int *class_index) {
+static char * handle_tag(short tag, void *java_class, int *class_index) {
   switch (tag) {
   case 1:
-    print_java_constant_utf8(java_class, class_index);
+    return print_java_constant_utf8(java_class, class_index);
     break;
   case 3:
-    print_java_constant_utf8(java_class, class_index);
+    return print_java_constant_utf8(java_class, class_index);
     break;
   case 4:
     break;
   case 7:
-    print_java_constant_class(java_class, class_index);
+    return print_java_constant_class(java_class, class_index);
     break;
   case 9:
   case 10:
   case 11:
-    print_java_constant_ref(java_class, class_index);
+    return print_java_constant_ref(java_class, class_index);
     break;
   case 12:
-    print_java_constant_name_and_type(java_class, class_index);
+    return print_java_constant_name_and_type(java_class, class_index);
   }
 }
 
-static void print_java_constant(void * java_class, int * class_index, int const_index) {
+static void print_java_constant(void * java_class, int * class_index, int const_index, java_class_s * class_object) {
   // Constant's are "1-indexed" whatever that means.
   printf("Constant %d:\n",
 	 const_index + 1
 	 );
-  short tag = (short) *((char*)java_class + *class_index);
+  char tag_c = *((char*)java_class + *class_index);
+  short tag = (short) tag_c;
+
   printf("    Constant Tag: %hd\n",
 	 tag
 	 );
   (*class_index)++;
-  handle_tag(tag, java_class, class_index);
+  char * info = handle_tag(tag, java_class, class_index);
+  add_constant(class_object, tag_c, info);
 }
 
 static void print_java_access_flags(void * java_class, int * class_index) {
@@ -373,19 +390,22 @@ static void print_java_method(void *java_class, int *class_index, int methods_in
 static void interpret_java_class(void * java_class, size_t *size) {
   int class_index = 0;
 
+  java_class_s * class_object = malloc(sizeof(java_class_s));
+  initialize_java_class(class_object);
+
   // Cafe babes are so fine.
-  print_java_magic_prefix(java_class, &class_index);
+  print_java_magic_prefix(java_class, &class_index, class_object);
   
   // Versions
-  print_java_minor_version(java_class, &class_index);
-  print_java_major_version(java_class, &class_index);
+  print_java_minor_version(java_class, &class_index, class_object);
+  print_java_major_version(java_class, &class_index, class_object);
   
-  const int const_pool_size = print_and_get_const_pool_size(java_class, &class_index);
+  const int const_pool_size = print_and_get_const_pool_size(java_class, &class_index, class_object);
   int const_index = 0;
 
   // const_pool_size - 1 due to JVM spec being strange..
   for (const_index; const_index < (const_pool_size - 1); const_index++) {
-    print_java_constant(java_class, &class_index, const_index);
+    print_java_constant(java_class, &class_index, const_index, class_object);
   }
   
   print_java_access_flags(java_class, &class_index);
